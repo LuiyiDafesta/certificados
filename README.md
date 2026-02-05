@@ -1,99 +1,52 @@
 # SSL Certificate Generator con Let's Encrypt
 
-Sistema web para generar certificados SSL gratuitos usando validación DNS-01.
+Sistema web para generar certificados SSL gratuitos.
 
-## 📁 Estructura del Proyecto
+## 📁 Estructura
 
 ```
-Letsencrypt/
-├── dist/                    # Build de producción (subir a Ferozo)
-├── src/                     # Código fuente React
-│   ├── components/
-│   │   ├── CertificateForm.jsx
-│   │   ├── DNSRecords.jsx
-│   │   └── CertificateDownload.jsx
-│   ├── App.jsx
-│   ├── main.jsx
-│   └── index.css
-├── n8n-workflows/           # Importar en n8n
-│   ├── generate-challenge.json
-│   └── get-certificate.json
-└── package.json
+certificados/           ← Se sincroniza con el hosting
+├── index.html          ← Página principal
+├── assets/             ← CSS y JS
+├── _source/            ← Código fuente (para desarrollo)
+│   ├── src/            ← Componentes React
+│   ├── n8n-workflows/  ← Importar en n8n
+│   └── package.json
+└── README.md
 ```
 
-## 🚀 Deploy en Ferozo
+## 🚀 Para el Hosting
 
-### 1. Subir Frontend
+Este repo está listo para sincronizar directamente con `public_html/certificados/`.
 
-1. Conecta por FTP a tu hosting de Ferozo
-2. Navega a `public_html/certificados/`
-3. Sube **todo el contenido** de la carpeta `dist/`:
-   ```
-   dist/
-   ├── index.html
-   └── assets/
-       ├── index-*.css
-       └── index-*.js
-   ```
+## 🔧 Importar Workflows en n8n
 
-### 2. Importar Workflows en n8n
+1. Abre https://flow1.lsnetinformatica.com.ar
+2. Ve a Workflows → Import from File
+3. Importa los archivos de `_source/n8n-workflows/`:
+   - `generate-challenge.json`
+   - `get-certificate.json`
+4. **Activa ambos workflows**
 
-1. Abre tu n8n: https://flow1.lsnetinformatica.com.ar
-2. Ve a **Workflows** → **Import from File**
-3. Importa los dos archivos:
-   - `n8n-workflows/generate-challenge.json`
-   - `n8n-workflows/get-certificate.json`
-4. **Activa** ambos workflows (toggle en la esquina superior derecha)
+## ⚠️ Cambiar a Producción
 
-### 3. Verificar Webhooks
+Los workflows usan **staging** (certificados de prueba).
 
-Los webhooks se crean automáticamente:
-- `https://flow1.lsnetinformatica.com.ar/webhook/generate-challenge`
-- `https://flow1.lsnetinformatica.com.ar/webhook/get-certificate`
-
-## 🔧 Cambiar de Staging a Producción
-
-Los workflows están configurados para usar **staging** (certificados de prueba).
-
-Para obtener certificados **reales**, edita el nodo "Generate Keys" en el workflow "Generate Challenge":
-
+Para certificados reales, edita el nodo "Generate Keys":
 ```javascript
-// Cambiar de:
-const DIRECTORY_URL = STAGING_DIRECTORY;
-
-// A:
+// Cambiar de STAGING_DIRECTORY a PRODUCTION_DIRECTORY
 const DIRECTORY_URL = PRODUCTION_DIRECTORY;
 ```
 
-## 📜 Tipos de Certificados Soportados
-
-| Tipo | Descripción |
-|------|-------------|
-| **Dominio Único** | Un solo dominio (ej: ejemplo.com) |
-| **Multi-dominio (SAN)** | Hasta 100 dominios en un certificado |
-| **Wildcard** | Todos los subdominios (ej: *.ejemplo.com) |
-| **Wildcard + Base** | Dominio base + todos los subdominios |
-
-## ⚠️ Notas Importantes
-
-1. **Los certificados expiran en 90 días** - Recuerda renovarlos
-2. **Límites de producción**: 50 certificados por dominio registrado por semana
-3. **Propagación DNS**: Esperar 2-5 minutos después de configurar registros TXT
-4. **Staging**: Los certificados de staging no son válidos para navegadores
-
-## 🛠️ Desarrollo Local
+## 🛠️ Desarrollo
 
 ```bash
-# Instalar dependencias
+cd _source
 npm install
-
-# Ejecutar en desarrollo
 npm run dev
-
-# Build para producción
 npm run build
+# Copiar dist/* a la raíz
 ```
 
-## 📞 Soporte
-
+---
 Desarrollado por [LSNet Informática](https://lsnetinformatica.com.ar)
