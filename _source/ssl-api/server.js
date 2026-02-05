@@ -211,6 +211,22 @@ app.post('/get-certificate', async (req, res) => {
             accountKey: Buffer.from(orderInfo.accountKeyPem)
         });
 
+        // Re-associate the existing account (required for the client to work with existing orders)
+        console.log('Re-associating ACME account...');
+        try {
+            await client.createAccount({
+                termsOfServiceAgreed: true,
+                contact: [`mailto:${orderInfo.email}`]
+            });
+            console.log('Account re-associated successfully');
+        } catch (accountError) {
+            console.error(`Error re-associating account: ${accountError.message}`);
+            return res.status(400).json({
+                error: 'Error al reconectar la cuenta ACME. Por favor, genera nuevos registros DNS.',
+                message: accountError.message
+            });
+        }
+
         // Verify DNS propagation first (optional check)
         console.log('Checking DNS propagation...');
         for (const challenge of orderInfo.challengeInfo) {
