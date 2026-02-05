@@ -2,10 +2,10 @@
     "name": "ssl-certificate-api",
     "version": "1.0.0",
     "description": "API backend for SSL certificate generation with Let's Encrypt ACME",
-    "main": "server.js",
+    "main": "app.js",
     "scripts": {
-        "start": "echo 'STARTING VIA NPM' && node server.js",
-        "dev": "node server.js"
+        "start": "echo 'STARTING VIA NPM (APP.JS)' && node app.js",
+        "dev": "node app.js"
     },
     "dependencies": {
         "acme-client": "^5.4.0",

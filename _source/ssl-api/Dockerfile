@@ -9,7 +9,7 @@ COPY package*.json ./
 RUN npm ci --only=production
 
 # Copy source code
-COPY server.js ./
+COPY app.js ./
 
 # Expose port
 EXPOSE 3000
@@ -19,4 +19,4 @@ ENV NODE_ENV=production
 ENV PORT=3000
 
 # Start the server directly with node to handle signals correctly
-CMD ["node", "server.js"]
+CMD ["node", "app.js"]
