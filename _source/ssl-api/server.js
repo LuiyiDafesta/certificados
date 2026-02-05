@@ -202,6 +202,8 @@ app.post('/get-certificate', async (req, res) => {
 
         console.log(`\n=== CERTIFICATE REQUEST ===`);
         console.log(`Domains: ${orderInfo.domains.join(', ')}`);
+        console.log(`Order URL: ${orderInfo.orderUrl}`);
+        console.log(`Directory URL: ${orderInfo.directoryUrl}`);
 
         // Pass PEM string directly to acme-client (it expects string, not KeyObject)
         const client = new acme.Client({
@@ -221,8 +223,18 @@ app.post('/get-certificate', async (req, res) => {
         }
 
         // Get fresh order status
-        const order = await client.getOrder(orderInfo.orderUrl);
-        console.log(`Order status: ${order.status}`);
+        console.log(`Fetching order from: ${orderInfo.orderUrl}`);
+        let order;
+        try {
+            order = await client.getOrder(orderInfo.orderUrl);
+            console.log(`Order status: ${order.status}`);
+        } catch (orderError) {
+            console.error(`Error fetching order: ${orderError.message}`);
+            return res.status(400).json({
+                error: 'El orden expiró o es inválido. Por favor, genera nuevos registros DNS.',
+                message: orderError.message
+            });
+        }
 
         // If order is already valid, just get the certificate
         if (order.status === 'valid') {
