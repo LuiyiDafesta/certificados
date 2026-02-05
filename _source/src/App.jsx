@@ -4,7 +4,7 @@ import DNSRecords from './components/DNSRecords'
 import CertificateDownload from './components/CertificateDownload'
 
 // API Configuration
-const N8N_BASE_URL = 'https://flow1.lsnetinformatica.com.ar/webhook'
+const N8N_BASE_URL = 'https://apissl.lsnetinformatica.com.ar'
 
 function App() {
   const [currentStep, setCurrentStep] = useState(1)

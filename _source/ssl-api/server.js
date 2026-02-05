@@ -8,7 +8,9 @@ const PORT = process.env.PORT || 3000;
 // CORS configuration - update with your frontend domain
 const ALLOWED_ORIGINS = [
     'https://lsnetinformatica.com.ar',
-    'http://localhost:5173'
+    'https://www.lsnetinformatica.com.ar',
+    'http://localhost:5173',
+    'http://localhost:3000'
 ];
 
 app.use(cors({
