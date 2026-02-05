@@ -210,7 +210,11 @@ function App() {
           <DNSRecords
             dnsRecords={dnsRecords}
             onGetCertificate={handleGetCertificate}
-            onBack={() => setCurrentStep(1)}
+            onBack={() => {
+              setCurrentStep(1)
+              setOrderData(null)
+              setDnsRecords([])
+            }}
             copyToClipboard={copyToClipboard}
             isLoading={isLoading}
           />
