@@ -1,0 +1,607 @@
+{
+    "name": "SSL Certificate Generator - Get Certificate",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "get-certificate",
+                "responseMode": "responseNode",
+                "options": {
+                    "allowedOrigins": "https://lsnetinformatica.com.ar"
+                }
+            },
+            "id": "webhook-1",
+            "name": "Webhook",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 2,
+            "position": [
+                250,
+                300
+            ],
+            "webhookId": "get-certificate"
+        },
+        {
+            "parameters": {
+                "jsCode": "const crypto = require('crypto');\n\n// Get input data\nconst input = $input.first().json.body;\nconst orderDataBase64 = input.orderData;\nconst domains = input.domains;\nconst email = input.email;\n\nif (!orderDataBase64) {\n  throw new Error('Order data is required');\n}\n\n// Decode order data\nconst orderData = JSON.parse(Buffer.from(orderDataBase64, 'base64').toString('utf-8'));\n\n// Base64URL encode function\nfunction base64url(input) {\n  if (typeof input === 'string') {\n    input = Buffer.from(input);\n  }\n  return input.toString('base64')\n    .replace(/\\+/g, '-')\n    .replace(/\\//g, '_')\n    .replace(/=/g, '');\n}\n\n// Sign JWS with kid\nfunction signJwsWithKid(payload, privateKeyPem, url, nonce, kid) {\n  const header = {\n    alg: 'RS256',\n    kid: kid,\n    nonce: nonce,\n    url: url\n  };\n  \n  const encodedHeader = base64url(JSON.stringify(header));\n  const encodedPayload = payload === '' ? '' : base64url(JSON.stringify(payload));\n  const signatureInput = `${encodedHeader}.${encodedPayload}`;\n  \n  const sign = crypto.createSign('RSA-SHA256');\n  sign.update(signatureInput);\n  const signature = sign.sign(privateKeyPem);\n  \n  return {\n    protected: encodedHeader,\n    payload: encodedPayload,\n    signature: base64url(signature)\n  };\n}\n\nreturn {\n  json: {\n    ...orderData,\n    domains: domains,\n    email: email,\n    signJwsWithKid: signJwsWithKid.toString(),\n    base64url: base64url.toString()\n  }\n};"
+            },
+            "id": "code-1",
+            "name": "Parse Order Data",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                470,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "method": "HEAD",
+                "url": "={{ $json.directory.newNonce }}",
+                "options": {}
+            },
+            "id": "http-1",
+            "name": "Get Fresh Nonce",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                690,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "const crypto = require('crypto');\nconst input = $input.first();\nconst prevData = $('Parse Order Data').first().json;\nconst nonce = input.headers['replay-nonce'];\n\n// Base64URL encode function\nfunction base64url(input) {\n  if (typeof input === 'string') {\n    input = Buffer.from(input);\n  }\n  return input.toString('base64')\n    .replace(/\\+/g, '-')\n    .replace(/\\//g, '_')\n    .replace(/=/g, '');\n}\n\n// Sign JWS with kid\nfunction signJwsWithKid(payload, privateKeyPem, url, nonce, kid) {\n  const header = {\n    alg: 'RS256',\n    kid: kid,\n    nonce: nonce,\n    url: url\n  };\n  \n  const encodedHeader = base64url(JSON.stringify(header));\n  const encodedPayload = payload === '' ? '' : base64url(JSON.stringify(payload));\n  const signatureInput = `${encodedHeader}.${encodedPayload}`;\n  \n  const sign = crypto.createSign('RSA-SHA256');\n  sign.update(signatureInput);\n  const signature = sign.sign(privateKeyPem);\n  \n  return {\n    protected: encodedHeader,\n    payload: encodedPayload,\n    signature: base64url(signature)\n  };\n}\n\n// Prepare challenge validations\nconst challengeRequests = prevData.challenges.map((challenge, index) => {\n  return {\n    challengeUrl: challenge.url,\n    jws: signJwsWithKid(\n      {},\n      prevData.accountPrivateKey,\n      challenge.url,\n      nonce,\n      prevData.accountUrl\n    ),\n    domain: challenge.domain,\n    index: index\n  };\n});\n\nreturn challengeRequests.map(req => ({\n  json: {\n    ...prevData,\n    currentChallenge: req,\n    nonce: nonce\n  }\n}));"
+            },
+            "id": "code-2",
+            "name": "Prepare Challenge Validations",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                910,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "={{ $json.currentChallenge.challengeUrl }}",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "Content-Type",
+                            "value": "application/jose+json"
+                        }
+                    ]
+                },
+                "sendBody": true,
+                "specifyBody": "json",
+                "jsonBody": "={{ JSON.stringify($json.currentChallenge.jws) }}",
+                "options": {
+                    "response": {
+                        "response": {
+                            "fullResponse": true,
+                            "responseFormat": "json"
+                        }
+                    }
+                }
+            },
+            "id": "http-2",
+            "name": "Submit Challenges",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                1130,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "amount": 10,
+                "unit": "seconds"
+            },
+            "id": "wait-1",
+            "name": "Wait for Validation",
+            "type": "n8n-nodes-base.wait",
+            "typeVersion": 1.1,
+            "position": [
+                1350,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "const inputs = $input.all();\nconst prevData = $('Prepare Challenge Validations').first().json;\n\n// Get latest nonce from any response\nlet latestNonce = prevData.nonce;\nfor (const item of inputs) {\n  if (item.json.headers && item.json.headers['replay-nonce']) {\n    latestNonce = item.json.headers['replay-nonce'];\n  }\n}\n\nreturn {\n  json: {\n    ...prevData,\n    nonce: latestNonce\n  }\n};"
+            },
+            "id": "code-3",
+            "name": "Collect Nonce",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                1570,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "method": "HEAD",
+                "url": "={{ $json.directory.newNonce }}",
+                "options": {}
+            },
+            "id": "http-3",
+            "name": "Get New Nonce",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                1790,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "const crypto = require('crypto');\nconst input = $input.first();\nconst prevData = $('Collect Nonce').first().json;\nconst nonce = input.headers['replay-nonce'];\n\n// Base64URL encode function\nfunction base64url(input) {\n  if (typeof input === 'string') {\n    input = Buffer.from(input);\n  }\n  return input.toString('base64')\n    .replace(/\\+/g, '-')\n    .replace(/\\//g, '_')\n    .replace(/=/g, '');\n}\n\n// Sign JWS with kid\nfunction signJwsWithKid(payload, privateKeyPem, url, nonce, kid) {\n  const header = {\n    alg: 'RS256',\n    kid: kid,\n    nonce: nonce,\n    url: url\n  };\n  \n  const encodedHeader = base64url(JSON.stringify(header));\n  const encodedPayload = payload === '' ? '' : base64url(JSON.stringify(payload));\n  const signatureInput = `${encodedHeader}.${encodedPayload}`;\n  \n  const sign = crypto.createSign('RSA-SHA256');\n  sign.update(signatureInput);\n  const signature = sign.sign(privateKeyPem);\n  \n  return {\n    protected: encodedHeader,\n    payload: encodedPayload,\n    signature: base64url(signature)\n  };\n}\n\n// Generate CSR\nfunction generateCSR(domains, privateKeyPem) {\n  // For simplicity, we'll create a basic CSR structure\n  // In production, use a proper CSR library\n  const forge = require('node-forge') || null;\n  \n  // Since node-forge might not be available, we'll use a simpler approach\n  // The CSR will be generated using openssl-like structure\n  \n  const mainDomain = domains.find(d => !d.startsWith('*.')) || domains[0];\n  \n  // Create CSR using crypto module\n  const privateKey = crypto.createPrivateKey(privateKeyPem);\n  \n  // Basic CSR structure (simplified)\n  // In production, you'd want to use a proper ASN.1 library\n  const csrInfo = {\n    subject: {\n      CN: mainDomain\n    },\n    subjectAltNames: domains.map(d => ({\n      type: 2, // DNS\n      value: d\n    }))\n  };\n  \n  return {\n    domains: domains,\n    mainDomain: mainDomain\n  };\n}\n\nconst csrInfo = generateCSR(prevData.domains, prevData.domainPrivateKey);\n\n// Check order status first\nconst orderCheckJws = signJwsWithKid(\n  '',\n  prevData.accountPrivateKey,\n  prevData.orderUrl,\n  nonce,\n  prevData.accountUrl\n);\n\nreturn {\n  json: {\n    ...prevData,\n    nonce: nonce,\n    csrInfo: csrInfo,\n    orderCheckJws: orderCheckJws\n  }\n};"
+            },
+            "id": "code-4",
+            "name": "Prepare Order Check",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                2010,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "={{ $json.orderUrl }}",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "Content-Type",
+                            "value": "application/jose+json"
+                        }
+                    ]
+                },
+                "sendBody": true,
+                "specifyBody": "json",
+                "jsonBody": "={{ JSON.stringify($json.orderCheckJws) }}",
+                "options": {
+                    "response": {
+                        "response": {
+                            "fullResponse": true,
+                            "responseFormat": "json"
+                        }
+                    }
+                }
+            },
+            "id": "http-4",
+            "name": "Check Order Status",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                2230,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "const crypto = require('crypto');\nconst input = $input.first().json;\nconst prevData = $('Prepare Order Check').first().json;\nconst orderStatus = input.body.status;\nconst newNonce = input.headers['replay-nonce'];\n\nconsole.log('Order status:', orderStatus);\n\nif (orderStatus !== 'ready' && orderStatus !== 'valid') {\n  // Check if pending, might need more time\n  if (orderStatus === 'pending') {\n    throw new Error('Los registros DNS aún no han sido verificados. Por favor espera unos minutos más y vuelve a intentar.');\n  }\n  throw new Error(`Estado de orden inesperado: ${orderStatus}. Puede que los registros DNS no estén configurados correctamente.`);\n}\n\n// Base64URL encode function\nfunction base64url(input) {\n  if (typeof input === 'string') {\n    input = Buffer.from(input);\n  }\n  return input.toString('base64')\n    .replace(/\\+/g, '-')\n    .replace(/\\//g, '_')\n    .replace(/=/g, '');\n}\n\n// Sign JWS with kid\nfunction signJwsWithKid(payload, privateKeyPem, url, nonce, kid) {\n  const header = {\n    alg: 'RS256',\n    kid: kid,\n    nonce: nonce,\n    url: url\n  };\n  \n  const encodedHeader = base64url(JSON.stringify(header));\n  const encodedPayload = payload === '' ? '' : base64url(JSON.stringify(payload));\n  const signatureInput = `${encodedHeader}.${encodedPayload}`;\n  \n  const sign = crypto.createSign('RSA-SHA256');\n  sign.update(signatureInput);\n  const signature = sign.sign(privateKeyPem);\n  \n  return {\n    protected: encodedHeader,\n    payload: encodedPayload,\n    signature: base64url(signature)\n  };\n}\n\n// Generate a proper CSR\nfunction createCSR(domains, privateKeyPem) {\n  const mainDomain = domains.find(d => !d.startsWith('*.')) || domains[0];\n  \n  // Create key object\n  const privateKey = crypto.createPrivateKey(privateKeyPem);\n  const publicKey = crypto.createPublicKey(privateKey);\n  \n  // Build CSR manually (simplified DER structure)\n  // Version, Subject (CN), Public Key, Extensions (SAN), Signature\n  \n  // For Let's Encrypt, we need a proper PKCS#10 CSR\n  // Using simplified approach with just the public key info\n  \n  const publicKeyDer = publicKey.export({ type: 'spki', format: 'der' });\n  \n  // Create a minimal CSR structure\n  // This is a simplified version - in production use a proper library\n  \n  // Subject: CN=domain\n  const cnOid = Buffer.from([0x55, 0x04, 0x03]); // 2.5.4.3 = CN\n  const cnValue = Buffer.from(mainDomain);\n  const cnSet = Buffer.concat([\n    Buffer.from([0x31]), // SET\n    encodeLength(2 + cnOid.length + 2 + cnValue.length + 4),\n    Buffer.from([0x30]), // SEQUENCE\n    encodeLength(cnOid.length + 2 + cnValue.length + 2),\n    Buffer.from([0x06, cnOid.length]),\n    cnOid,\n    Buffer.from([0x0c, cnValue.length]), // UTF8String\n    cnValue\n  ]);\n  \n  const subject = Buffer.concat([\n    Buffer.from([0x30]), // SEQUENCE\n    encodeLength(cnSet.length),\n    cnSet\n  ]);\n  \n  // Subject Alternative Names extension\n  const sanOid = Buffer.from([0x55, 0x1d, 0x11]); // 2.5.29.17 = SAN\n  let sanValues = Buffer.alloc(0);\n  for (const domain of domains) {\n    const domainBuf = Buffer.from(domain);\n    sanValues = Buffer.concat([\n      sanValues,\n      Buffer.from([0x82, domainBuf.length]), // DNS name (context tag 2)\n      domainBuf\n    ]);\n  }\n  \n  const sanSeq = Buffer.concat([\n    Buffer.from([0x30]),\n    encodeLength(sanValues.length),\n    sanValues\n  ]);\n  \n  const sanExt = Buffer.concat([\n    Buffer.from([0x30]),\n    encodeLength(2 + sanOid.length + 2 + sanSeq.length),\n    Buffer.from([0x06, sanOid.length]),\n    sanOid,\n    Buffer.from([0x04]),\n    encodeLength(sanSeq.length),\n    sanSeq\n  ]);\n  \n  const extensions = Buffer.concat([\n    Buffer.from([0xa0]), // Context tag 0 for extensions\n    encodeLength(2 + sanExt.length + 2),\n    Buffer.from([0x30]),\n    encodeLength(sanExt.length + 2),\n    Buffer.from([0x30]),\n    encodeLength(sanExt.length),\n    sanExt\n  ]);\n  \n  // CSR Info\n  const version = Buffer.from([0x02, 0x01, 0x00]); // INTEGER 0\n  \n  const csrInfo = Buffer.concat([\n    Buffer.from([0x30]),\n    encodeLength(version.length + subject.length + publicKeyDer.length + extensions.length),\n    version,\n    subject,\n    publicKeyDer,\n    extensions\n  ]);\n  \n  // Sign the CSR\n  const sign = crypto.createSign('RSA-SHA256');\n  sign.update(csrInfo);\n  const signature = sign.sign(privateKey);\n  \n  // Signature algorithm (SHA256 with RSA)\n  const sigAlg = Buffer.from([\n    0x30, 0x0d,\n    0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b, // SHA256withRSA OID\n    0x05, 0x00 // NULL\n  ]);\n  \n  // Bit string for signature\n  const sigBitString = Buffer.concat([\n    Buffer.from([0x03]),\n    encodeLength(signature.length + 1),\n    Buffer.from([0x00]), // No unused bits\n    signature\n  ]);\n  \n  // Complete CSR\n  const csr = Buffer.concat([\n    Buffer.from([0x30]),\n    encodeLength(csrInfo.length + sigAlg.length + sigBitString.length),\n    csrInfo,\n    sigAlg,\n    sigBitString\n  ]);\n  \n  return base64url(csr);\n}\n\nfunction encodeLength(len) {\n  if (len < 128) {\n    return Buffer.from([len]);\n  } else if (len < 256) {\n    return Buffer.from([0x81, len]);\n  } else if (len < 65536) {\n    return Buffer.from([0x82, (len >> 8) & 0xff, len & 0xff]);\n  } else {\n    return Buffer.from([0x83, (len >> 16) & 0xff, (len >> 8) & 0xff, len & 0xff]);\n  }\n}\n\n// If order is valid, we can get the certificate\nif (orderStatus === 'valid') {\n  // Certificate is already available\n  return {\n    json: {\n      ...prevData,\n      nonce: newNonce,\n      orderStatus: orderStatus,\n      certificateUrl: input.body.certificate,\n      skipFinalize: true\n    }\n  };\n}\n\n// Generate CSR for finalize\nconst csrBase64 = createCSR(prevData.domains, prevData.domainPrivateKey);\n\n// Finalize payload\nconst finalizePayload = {\n  csr: csrBase64\n};\n\nconst finalizeJws = signJwsWithKid(\n  finalizePayload,\n  prevData.accountPrivateKey,\n  prevData.finalizeUrl,\n  newNonce,\n  prevData.accountUrl\n);\n\nreturn {\n  json: {\n    ...prevData,\n    nonce: newNonce,\n    orderStatus: orderStatus,\n    finalizeJws: finalizeJws,\n    skipFinalize: false\n  }\n};"
+            },
+            "id": "code-5",
+            "name": "Check Status & Prepare Finalize",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                2450,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "leftValue": "",
+                        "caseSensitive": true,
+                        "typeValidation": "strict"
+                    },
+                    "combinator": "and",
+                    "conditions": [
+                        {
+                            "id": "condition-1",
+                            "operator": {
+                                "type": "boolean",
+                                "operation": "false"
+                            },
+                            "leftValue": "={{ $json.skipFinalize }}",
+                            "rightValue": ""
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "if-1",
+            "name": "Need Finalize?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 2,
+            "position": [
+                2670,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "={{ $json.finalizeUrl }}",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "Content-Type",
+                            "value": "application/jose+json"
+                        }
+                    ]
+                },
+                "sendBody": true,
+                "specifyBody": "json",
+                "jsonBody": "={{ JSON.stringify($json.finalizeJws) }}",
+                "options": {
+                    "response": {
+                        "response": {
+                            "fullResponse": true,
+                            "responseFormat": "json"
+                        }
+                    }
+                }
+            },
+            "id": "http-5",
+            "name": "Finalize Order",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                2890,
+                220
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "const input = $input.first().json;\nconst prevData = $('Check Status & Prepare Finalize').first().json;\n\nconst certificateUrl = input.body.certificate || prevData.certificateUrl;\nconst newNonce = input.headers ? input.headers['replay-nonce'] : prevData.nonce;\n\nif (!certificateUrl) {\n  throw new Error('No se pudo obtener la URL del certificado');\n}\n\nreturn {\n  json: {\n    ...prevData,\n    certificateUrl: certificateUrl,\n    nonce: newNonce\n  }\n};"
+            },
+            "id": "code-6",
+            "name": "Get Certificate URL",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                3110,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "method": "HEAD",
+                "url": "={{ $json.directory.newNonce }}",
+                "options": {}
+            },
+            "id": "http-6",
+            "name": "Get Nonce for Cert",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                3330,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "const crypto = require('crypto');\nconst input = $input.first();\nconst prevData = $('Get Certificate URL').first().json;\nconst nonce = input.headers['replay-nonce'];\n\n// Base64URL encode function\nfunction base64url(input) {\n  if (typeof input === 'string') {\n    input = Buffer.from(input);\n  }\n  return input.toString('base64')\n    .replace(/\\+/g, '-')\n    .replace(/\\//g, '_')\n    .replace(/=/g, '');\n}\n\n// Sign JWS with kid\nfunction signJwsWithKid(payload, privateKeyPem, url, nonce, kid) {\n  const header = {\n    alg: 'RS256',\n    kid: kid,\n    nonce: nonce,\n    url: url\n  };\n  \n  const encodedHeader = base64url(JSON.stringify(header));\n  const encodedPayload = payload === '' ? '' : base64url(JSON.stringify(payload));\n  const signatureInput = `${encodedHeader}.${encodedPayload}`;\n  \n  const sign = crypto.createSign('RSA-SHA256');\n  sign.update(signatureInput);\n  const signature = sign.sign(privateKeyPem);\n  \n  return {\n    protected: encodedHeader,\n    payload: encodedPayload,\n    signature: base64url(signature)\n  };\n}\n\nconst certJws = signJwsWithKid(\n  '',\n  prevData.accountPrivateKey,\n  prevData.certificateUrl,\n  nonce,\n  prevData.accountUrl\n);\n\nreturn {\n  json: {\n    ...prevData,\n    certJws: certJws\n  }\n};"
+            },
+            "id": "code-7",
+            "name": "Prepare Cert Request",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                3550,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "={{ $json.certificateUrl }}",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "Content-Type",
+                            "value": "application/jose+json"
+                        },
+                        {
+                            "name": "Accept",
+                            "value": "application/pem-certificate-chain"
+                        }
+                    ]
+                },
+                "sendBody": true,
+                "specifyBody": "json",
+                "jsonBody": "={{ JSON.stringify($json.certJws) }}",
+                "options": {
+                    "response": {
+                        "response": {
+                            "fullResponse": true,
+                            "responseFormat": "text"
+                        }
+                    }
+                }
+            },
+            "id": "http-7",
+            "name": "Download Certificate",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                3770,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "const input = $input.first().json;\nconst prevData = $('Prepare Cert Request').first().json;\n\n// The certificate chain is in PEM format\nconst fullChain = input.body;\n\n// Split the certificate chain\nconst certs = fullChain.split(/(?=-----BEGIN CERTIFICATE-----)/g).filter(c => c.trim());\n\n// First cert is the domain certificate\nconst certificate = certs[0] || '';\n\n// Rest are the CA bundle (intermediate + root)\nconst caBundle = certs.slice(1).join('\\n');\n\n// Get the private key\nconst privateKey = prevData.domainPrivateKey;\n\nreturn {\n  json: {\n    certificate: certificate.trim(),\n    privateKey: privateKey.trim(),\n    caBundle: caBundle.trim(),\n    fullChain: fullChain.trim()\n  }\n};"
+            },
+            "id": "code-8",
+            "name": "Parse Certificate",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                3990,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "respondWith": "json",
+                "responseBody": "={{ $json }}",
+                "options": {
+                    "responseHeaders": {
+                        "entries": [
+                            {
+                                "name": "Access-Control-Allow-Origin",
+                                "value": "https://lsnetinformatica.com.ar"
+                            },
+                            {
+                                "name": "Access-Control-Allow-Methods",
+                                "value": "POST, OPTIONS"
+                            },
+                            {
+                                "name": "Access-Control-Allow-Headers",
+                                "value": "Content-Type"
+                            }
+                        ]
+                    }
+                }
+            },
+            "id": "respond-1",
+            "name": "Respond with Certificate",
+            "type": "n8n-nodes-base.respondToWebhook",
+            "typeVersion": 1.1,
+            "position": [
+                4210,
+                300
+            ]
+        }
+    ],
+    "connections": {
+        "Webhook": {
+            "main": [
+                [
+                    {
+                        "node": "Parse Order Data",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Parse Order Data": {
+            "main": [
+                [
+                    {
+                        "node": "Get Fresh Nonce",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Get Fresh Nonce": {
+            "main": [
+                [
+                    {
+                        "node": "Prepare Challenge Validations",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Prepare Challenge Validations": {
+            "main": [
+                [
+                    {
+                        "node": "Submit Challenges",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Submit Challenges": {
+            "main": [
+                [
+                    {
+                        "node": "Wait for Validation",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Wait for Validation": {
+            "main": [
+                [
+                    {
+                        "node": "Collect Nonce",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Collect Nonce": {
+            "main": [
+                [
+                    {
+                        "node": "Get New Nonce",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Get New Nonce": {
+            "main": [
+                [
+                    {
+                        "node": "Prepare Order Check",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Prepare Order Check": {
+            "main": [
+                [
+                    {
+                        "node": "Check Order Status",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Check Order Status": {
+            "main": [
+                [
+                    {
+                        "node": "Check Status & Prepare Finalize",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Check Status & Prepare Finalize": {
+            "main": [
+                [
+                    {
+                        "node": "Need Finalize?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Need Finalize?": {
+            "main": [
+                [
+                    {
+                        "node": "Finalize Order",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Get Certificate URL",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Finalize Order": {
+            "main": [
+                [
+                    {
+                        "node": "Get Certificate URL",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Get Certificate URL": {
+            "main": [
+                [
+                    {
+                        "node": "Get Nonce for Cert",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Get Nonce for Cert": {
+            "main": [
+                [
+                    {
+                        "node": "Prepare Cert Request",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Prepare Cert Request": {
+            "main": [
+                [
+                    {
+                        "node": "Download Certificate",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Download Certificate": {
+            "main": [
+                [
+                    {
+                        "node": "Parse Certificate",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Parse Certificate": {
+            "main": [
+                [
+                    {
+                        "node": "Respond with Certificate",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "active": false,
+    "settings": {
+        "executionOrder": "v1"
+    },
+    "versionId": "1",
+    "meta": {
+        "instanceId": "ssl-cert-generator"
+    },
+    "tags": []
+}

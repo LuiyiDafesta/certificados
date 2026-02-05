@@ -1,0 +1,391 @@
+{
+  "name": "SSL Certificate Generator - Generate Challenge",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "generate-challenge",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "https://lsnetinformatica.com.ar"
+        }
+      },
+      "id": "webhook-1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "generate-challenge"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ACME Directory URLs\nconst STAGING_DIRECTORY = 'https://acme-staging-v02.api.letsencrypt.org/directory';\nconst PRODUCTION_DIRECTORY = 'https://acme-v02.api.letsencrypt.org/directory';\n\n// Use staging for testing (change to PRODUCTION_DIRECTORY when ready)\nconst DIRECTORY_URL = STAGING_DIRECTORY;\n\n// Get input data\nconst input = $input.first().json.body;\nconst email = input.email;\nconst domains = input.domains.filter(d => d && d.trim() !== '');\nconst certificateType = input.certificateType;\n\nif (!email || domains.length === 0) {\n  throw new Error('Email and at least one domain are required');\n}\n\n// Generate RSA key pair for account (in production, store and reuse this)\nconst crypto = require('crypto');\n\n// Generate account key pair\nconst { privateKey: accountPrivateKey, publicKey: accountPublicKey } = crypto.generateKeyPairSync('rsa', {\n  modulusLength: 2048,\n  publicKeyEncoding: { type: 'spki', format: 'pem' },\n  privateKeyEncoding: { type: 'pkcs8', format: 'pem' }\n});\n\n// Generate domain key pair (for CSR)\nconst { privateKey: domainPrivateKey, publicKey: domainPublicKey } = crypto.generateKeyPairSync('rsa', {\n  modulusLength: 2048,\n  publicKeyEncoding: { type: 'spki', format: 'pem' },\n  privateKeyEncoding: { type: 'pkcs8', format: 'pem' }\n});\n\n// Base64URL encode function\nfunction base64url(buffer) {\n  return buffer.toString('base64')\n    .replace(/\\+/g, '-')\n    .replace(/\\//g, '_')\n    .replace(/=/g, '');\n}\n\n// Get JWK from public key\nfunction getJwk(publicKeyPem) {\n  const publicKeyDer = crypto.createPublicKey(publicKeyPem).export({ type: 'spki', format: 'der' });\n  // Parse the RSA public key\n  const keyObject = crypto.createPublicKey(publicKeyPem);\n  const jwk = keyObject.export({ format: 'jwk' });\n  return {\n    kty: 'RSA',\n    n: jwk.n,\n    e: jwk.e\n  };\n}\n\n// Generate thumbprint for key\nfunction getThumbprint(jwk) {\n  const ordered = JSON.stringify({ e: jwk.e, kty: jwk.kty, n: jwk.n });\n  const hash = crypto.createHash('sha256').update(ordered).digest();\n  return base64url(hash);\n}\n\nconst jwk = getJwk(accountPublicKey);\nconst thumbprint = getThumbprint(jwk);\n\n// Store for next step\nreturn {\n  json: {\n    directoryUrl: DIRECTORY_URL,\n    email: email,\n    domains: domains,\n    certificateType: certificateType,\n    accountPrivateKey: accountPrivateKey,\n    accountPublicKey: accountPublicKey,\n    domainPrivateKey: domainPrivateKey,\n    jwk: jwk,\n    thumbprint: thumbprint\n  }\n};"
+      },
+      "id": "code-1",
+      "name": "Generate Keys",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.directoryUrl }}",
+        "options": {}
+      },
+      "id": "http-1",
+      "name": "Get ACME Directory",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst prevData = $('Generate Keys').first().json;\n\n// Extract directory URLs\nconst directory = {\n  newNonce: input.newNonce,\n  newAccount: input.newAccount,\n  newOrder: input.newOrder,\n  revokeCert: input.revokeCert,\n  keyChange: input.keyChange\n};\n\nreturn {\n  json: {\n    ...prevData,\n    directory: directory\n  }\n};"
+      },
+      "id": "code-2",
+      "name": "Parse Directory",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [910, 300]
+    },
+    {
+      "parameters": {
+        "method": "HEAD",
+        "url": "={{ $json.directory.newNonce }}",
+        "options": {}
+      },
+      "id": "http-2",
+      "name": "Get Nonce",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1130, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst input = $input.first();\nconst prevData = $('Parse Directory').first().json;\nconst nonce = input.headers['replay-nonce'];\n\n// Base64URL encode function\nfunction base64url(input) {\n  if (typeof input === 'string') {\n    input = Buffer.from(input);\n  }\n  return input.toString('base64')\n    .replace(/\\+/g, '-')\n    .replace(/\\//g, '_')\n    .replace(/=/g, '');\n}\n\n// Sign JWS\nfunction signJws(payload, privateKeyPem, url, nonce, jwk) {\n  const header = {\n    alg: 'RS256',\n    jwk: jwk,\n    nonce: nonce,\n    url: url\n  };\n  \n  const encodedHeader = base64url(JSON.stringify(header));\n  const encodedPayload = payload === '' ? '' : base64url(JSON.stringify(payload));\n  const signatureInput = `${encodedHeader}.${encodedPayload}`;\n  \n  const sign = crypto.createSign('RSA-SHA256');\n  sign.update(signatureInput);\n  const signature = sign.sign(privateKeyPem);\n  \n  return {\n    protected: encodedHeader,\n    payload: encodedPayload,\n    signature: base64url(signature)\n  };\n}\n\n// Create account request\nconst accountPayload = {\n  termsOfServiceAgreed: true,\n  contact: [`mailto:${prevData.email}`]\n};\n\nconst accountJws = signJws(\n  accountPayload,\n  prevData.accountPrivateKey,\n  prevData.directory.newAccount,\n  nonce,\n  prevData.jwk\n);\n\nreturn {\n  json: {\n    ...prevData,\n    nonce: nonce,\n    accountJws: accountJws\n  }\n};"
+      },
+      "id": "code-3",
+      "name": "Prepare Account Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1350, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.directory.newAccount }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/jose+json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.accountJws) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "http-3",
+      "name": "Create Account",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1570, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst input = $input.first().json;\nconst prevData = $('Prepare Account Request').first().json;\n\n// Get new nonce from response\nconst newNonce = input.headers['replay-nonce'];\nconst accountUrl = input.headers['location'];\n\n// Base64URL encode function\nfunction base64url(input) {\n  if (typeof input === 'string') {\n    input = Buffer.from(input);\n  }\n  return input.toString('base64')\n    .replace(/\\+/g, '-')\n    .replace(/\\//g, '_')\n    .replace(/=/g, '');\n}\n\n// Sign JWS with kid instead of jwk\nfunction signJwsWithKid(payload, privateKeyPem, url, nonce, kid) {\n  const header = {\n    alg: 'RS256',\n    kid: kid,\n    nonce: nonce,\n    url: url\n  };\n  \n  const encodedHeader = base64url(JSON.stringify(header));\n  const encodedPayload = payload === '' ? '' : base64url(JSON.stringify(payload));\n  const signatureInput = `${encodedHeader}.${encodedPayload}`;\n  \n  const sign = crypto.createSign('RSA-SHA256');\n  sign.update(signatureInput);\n  const signature = sign.sign(privateKeyPem);\n  \n  return {\n    protected: encodedHeader,\n    payload: encodedPayload,\n    signature: base64url(signature)\n  };\n}\n\n// Build identifiers for order\nconst identifiers = prevData.domains.map(domain => ({\n  type: 'dns',\n  value: domain.startsWith('*.') ? domain.substring(2) : domain\n}));\n\n// For wildcard, we need to include the wildcard identifier\nconst orderIdentifiers = prevData.domains.map(domain => ({\n  type: 'dns',\n  value: domain\n}));\n\n// Create order request\nconst orderPayload = {\n  identifiers: orderIdentifiers\n};\n\nconst orderJws = signJwsWithKid(\n  orderPayload,\n  prevData.accountPrivateKey,\n  prevData.directory.newOrder,\n  newNonce,\n  accountUrl\n);\n\nreturn {\n  json: {\n    ...prevData,\n    accountUrl: accountUrl,\n    nonce: newNonce,\n    orderJws: orderJws\n  }\n};"
+      },
+      "id": "code-4",
+      "name": "Prepare Order",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1790, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.directory.newOrder }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/jose+json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.orderJws) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "http-4",
+      "name": "Create Order",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2010, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst input = $input.first().json;\nconst prevData = $('Prepare Order').first().json;\n\n// Order data\nconst orderUrl = input.headers['location'];\nconst orderBody = input.body;\nconst newNonce = input.headers['replay-nonce'];\n\n// We need to fetch authorizations to get the challenges\n// Store all data for the next step\nreturn {\n  json: {\n    ...prevData,\n    orderUrl: orderUrl,\n    order: orderBody,\n    authorizations: orderBody.authorizations,\n    finalizeUrl: orderBody.finalize,\n    nonce: newNonce\n  }\n};"
+      },
+      "id": "code-5",
+      "name": "Parse Order",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2230, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst prevData = $('Parse Order').first().json;\n\n// Base64URL encode function\nfunction base64url(input) {\n  if (typeof input === 'string') {\n    input = Buffer.from(input);\n  }\n  return input.toString('base64')\n    .replace(/\\+/g, '-')\n    .replace(/\\//g, '_')\n    .replace(/=/g, '');\n}\n\n// Sign JWS with kid\nfunction signJwsWithKid(payload, privateKeyPem, url, nonce, kid) {\n  const header = {\n    alg: 'RS256',\n    kid: kid,\n    nonce: nonce,\n    url: url\n  };\n  \n  const encodedHeader = base64url(JSON.stringify(header));\n  const encodedPayload = payload === '' ? '' : base64url(JSON.stringify(payload));\n  const signatureInput = `${encodedHeader}.${encodedPayload}`;\n  \n  const sign = crypto.createSign('RSA-SHA256');\n  sign.update(signatureInput);\n  const signature = sign.sign(privateKeyPem);\n  \n  return {\n    protected: encodedHeader,\n    payload: encodedPayload,\n    signature: base64url(signature)\n  };\n}\n\n// Create request for each authorization\nconst authRequests = prevData.authorizations.map((authUrl, index) => {\n  const jws = signJwsWithKid(\n    '',\n    prevData.accountPrivateKey,\n    authUrl,\n    prevData.nonce,\n    prevData.accountUrl\n  );\n  \n  return {\n    authUrl: authUrl,\n    jws: jws,\n    index: index\n  };\n});\n\nreturn authRequests.map(req => ({\n  json: {\n    ...prevData,\n    currentAuth: req\n  }\n}));"
+      },
+      "id": "code-6",
+      "name": "Prepare Auth Requests",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2450, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.currentAuth.authUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/jose+json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.currentAuth.jws) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "http-5",
+      "name": "Get Authorizations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2670, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst inputs = $input.all();\nconst prevData = $('Prepare Auth Requests').first().json;\n\n// Base64URL encode function\nfunction base64url(input) {\n  if (typeof input === 'string') {\n    input = Buffer.from(input);\n  }\n  return input.toString('base64')\n    .replace(/\\+/g, '-')\n    .replace(/\\//g, '_')\n    .replace(/=/g, '');\n}\n\n// Process all authorizations and extract DNS challenges\nconst dnsRecords = [];\nconst challenges = [];\n\nfor (const item of inputs) {\n  const authData = item.json.body;\n  const identifier = authData.identifier;\n  \n  // Find DNS-01 challenge\n  const dnsChallenge = authData.challenges.find(c => c.type === 'dns-01');\n  \n  if (dnsChallenge) {\n    // Calculate the key authorization\n    const keyAuthz = `${dnsChallenge.token}.${prevData.thumbprint}`;\n    \n    // SHA256 hash and base64url encode\n    const hash = crypto.createHash('sha256').update(keyAuthz).digest();\n    const txtValue = base64url(hash);\n    \n    // Build DNS record name\n    const recordName = `_acme-challenge.${identifier.value}`;\n    \n    dnsRecords.push({\n      name: recordName,\n      value: txtValue,\n      domain: identifier.value\n    });\n    \n    challenges.push({\n      url: dnsChallenge.url,\n      token: dnsChallenge.token,\n      keyAuthorization: keyAuthz,\n      domain: identifier.value\n    });\n  }\n}\n\n// Prepare data to store for the next workflow\nconst orderData = {\n  accountPrivateKey: prevData.accountPrivateKey,\n  accountUrl: prevData.accountUrl,\n  domainPrivateKey: prevData.domainPrivateKey,\n  orderUrl: prevData.orderUrl,\n  finalizeUrl: prevData.finalizeUrl,\n  challenges: challenges,\n  thumbprint: prevData.thumbprint,\n  directory: prevData.directory\n};\n\nreturn {\n  json: {\n    dnsRecords: dnsRecords,\n    orderData: Buffer.from(JSON.stringify(orderData)).toString('base64')\n  }\n};"
+      },
+      "id": "code-7",
+      "name": "Generate DNS Records",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2890, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "https://lsnetinformatica.com.ar"
+              },
+              {
+                "name": "Access-Control-Allow-Methods",
+                "value": "POST, OPTIONS"
+              },
+              {
+                "name": "Access-Control-Allow-Headers",
+                "value": "Content-Type"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-1",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3110, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Generate Keys",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Keys": {
+      "main": [
+        [
+          {
+            "node": "Get ACME Directory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get ACME Directory": {
+      "main": [
+        [
+          {
+            "node": "Parse Directory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Directory": {
+      "main": [
+        [
+          {
+            "node": "Get Nonce",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Nonce": {
+      "main": [
+        [
+          {
+            "node": "Prepare Account Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Account Request": {
+      "main": [
+        [
+          {
+            "node": "Create Account",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Account": {
+      "main": [
+        [
+          {
+            "node": "Prepare Order",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Order": {
+      "main": [
+        [
+          {
+            "node": "Create Order",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Order": {
+      "main": [
+        [
+          {
+            "node": "Parse Order",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Order": {
+      "main": [
+        [
+          {
+            "node": "Prepare Auth Requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Auth Requests": {
+      "main": [
+        [
+          {
+            "node": "Get Authorizations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Authorizations": {
+      "main": [
+        [
+          {
+            "node": "Generate DNS Records",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate DNS Records": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "meta": {
+    "instanceId": "ssl-cert-generator"
+  },
+  "tags": []
+}
