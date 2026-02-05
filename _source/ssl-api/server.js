@@ -206,9 +206,12 @@ app.post('/get-certificate', async (req, res) => {
         console.log(`Directory URL: ${orderInfo.directoryUrl}`);
 
         // Pass PEM string directly to acme-client (it expects string, not KeyObject)
+        const accountKeyBuf = Buffer.from(orderInfo.accountKeyPem);
+        console.log(`[VERSION CHECK v2] Processing request. Account Key size: ${accountKeyBuf.length}`);
+
         const client = new acme.Client({
             directoryUrl: orderInfo.directoryUrl,
-            accountKey: Buffer.from(orderInfo.accountKeyPem)
+            accountKey: accountKeyBuf
         });
 
         // Re-associate the existing account (required for the client to work with existing orders)
