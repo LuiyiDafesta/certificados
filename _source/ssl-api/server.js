@@ -5,7 +5,7 @@ const acme = require('acme-client');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// CORS configuration - update with your frontend domain
+// CORS configuration
 const ALLOWED_ORIGINS = [
     'https://lsnetinformatica.com.ar',
     'https://www.lsnetinformatica.com.ar',
@@ -15,29 +15,55 @@ const ALLOWED_ORIGINS = [
 
 app.use(cors({
     origin: ALLOWED_ORIGINS,
-    methods: ['POST', 'OPTIONS'],
+    methods: ['POST', 'GET', 'OPTIONS'],
     allowedHeaders: ['Content-Type']
 }));
 
 app.use(express.json());
 
-// Store pending orders (in production, use Redis or a database)
-const pendingOrders = new Map();
-
 // ACME Directory URLs
 const STAGING_DIRECTORY = acme.directory.letsencrypt.staging;
 const PRODUCTION_DIRECTORY = acme.directory.letsencrypt.production;
 
-// Use staging for testing (change to PRODUCTION_DIRECTORY when ready)
 const DIRECTORY_URL = process.env.ACME_PRODUCTION === 'true'
     ? PRODUCTION_DIRECTORY
     : STAGING_DIRECTORY;
 
 console.log(`Using ACME directory: ${DIRECTORY_URL === PRODUCTION_DIRECTORY ? 'PRODUCTION' : 'STAGING'}`);
 
+// Helper function to wait
+const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Helper function to verify DNS propagation
+async function verifyDNSPropagation(domain, expectedValue, maxAttempts = 5) {
+    const dns = require('dns').promises;
+    const hostname = `_acme-challenge.${domain}`;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            console.log(`DNS verification attempt ${attempt}/${maxAttempts} for ${hostname}`);
+            const records = await dns.resolveTxt(hostname);
+            const flatRecords = records.flat();
+
+            if (flatRecords.includes(expectedValue)) {
+                console.log(`DNS verified for ${hostname}`);
+                return true;
+            }
+            console.log(`DNS records found but value not matching. Found: ${flatRecords.join(', ')}`);
+        } catch (err) {
+            console.log(`DNS lookup failed for ${hostname}: ${err.message}`);
+        }
+
+        if (attempt < maxAttempts) {
+            console.log('Waiting 10 seconds before retry...');
+            await wait(10000);
+        }
+    }
+    return false;
+}
+
 /**
  * Step 1: Generate DNS Challenge
- * Creates ACME account, order, and returns DNS TXT records to configure
  */
 app.post('/generate-challenge', async (req, res) => {
     try {
@@ -49,7 +75,6 @@ app.post('/generate-challenge', async (req, res) => {
             });
         }
 
-        // Filter empty domains
         const validDomains = domains.filter(d => d && d.trim() !== '');
 
         if (validDomains.length === 0) {
@@ -58,6 +83,7 @@ app.post('/generate-challenge', async (req, res) => {
             });
         }
 
+        console.log(`\n=== NEW REQUEST ===`);
         console.log(`Generating challenge for domains: ${validDomains.join(', ')}`);
 
         // Create ACME client
@@ -76,20 +102,27 @@ app.post('/generate-challenge', async (req, res) => {
 
         console.log('ACME account created');
 
-        // Create order for all domains
-        const order = await client.createOrder({
-            identifiers: validDomains.map(domain => ({
-                type: 'dns',
-                value: domain.startsWith('*.') ? domain.substring(2) : domain
-            }))
-        });
+        // Generate domain private key NOW (we'll need it later)
+        const domainKey = await acme.crypto.createPrivateKey();
 
+        // Create order
+        const identifiers = validDomains.map(domain => ({
+            type: 'dns',
+            value: domain.replace(/^\*\./, '') // Remove wildcard prefix for identifier
+        }));
+
+        // Remove duplicates
+        const uniqueIdentifiers = identifiers.filter((id, index, self) =>
+            index === self.findIndex(t => t.value === id.value)
+        );
+
+        const order = await client.createOrder({ identifiers: uniqueIdentifiers });
         console.log('Order created');
 
         // Get authorizations and DNS challenges
         const authorizations = await client.getAuthorizations(order);
         const dnsRecords = [];
-        const challengeData = [];
+        const challengeInfo = [];
 
         for (const authz of authorizations) {
             const challenge = authz.challenges.find(c => c.type === 'dns-01');
@@ -103,43 +136,39 @@ app.post('/generate-challenge', async (req, res) => {
                     domain: authz.identifier.value
                 });
 
-                challengeData.push({
+                challengeInfo.push({
+                    domain: authz.identifier.value,
                     challenge: challenge,
-                    authz: authz
+                    keyAuthorization: keyAuthorization
                 });
             }
         }
 
-        // Generate order ID and store data
-        const orderId = Buffer.from(JSON.stringify({
-            timestamp: Date.now(),
-            email: email
-        })).toString('base64').substring(0, 32);
-
-        // Store order data for later retrieval
-        pendingOrders.set(orderId, {
-            client: client,
-            order: order,
-            accountKey: accountKey,
-            challengeData: challengeData,
+        // Store everything needed for certificate generation
+        const orderData = {
+            accountKeyPem: accountKey.toString(),
+            domainKeyPem: domainKey.toString(),
+            orderUrl: order.url,
             domains: validDomains,
             email: email,
-            createdAt: Date.now()
-        });
+            challengeInfo: challengeInfo.map(c => ({
+                domain: c.domain,
+                challengeUrl: c.challenge.url,
+                token: c.challenge.token,
+                keyAuthorization: c.keyAuthorization
+            })),
+            directoryUrl: DIRECTORY_URL
+        };
 
-        // Clean up old orders (older than 1 hour)
-        const oneHourAgo = Date.now() - 3600000;
-        for (const [key, value] of pendingOrders.entries()) {
-            if (value.createdAt < oneHourAgo) {
-                pendingOrders.delete(key);
-            }
-        }
+        // Encode order data
+        const orderDataEncoded = Buffer.from(JSON.stringify(orderData)).toString('base64');
 
-        console.log(`Challenge generated with orderId: ${orderId}`);
+        console.log(`Challenge generated successfully`);
+        console.log(`DNS Records to configure: ${dnsRecords.length}`);
 
         res.json({
             dnsRecords: dnsRecords,
-            orderData: orderId
+            orderData: orderDataEncoded
         });
 
     } catch (error) {
@@ -152,87 +181,178 @@ app.post('/generate-challenge', async (req, res) => {
 });
 
 /**
- * Step 2: Verify DNS and Get Certificate
- * Validates DNS challenges and issues the certificate
+ * Step 2: Get Certificate with retry logic
  */
 app.post('/get-certificate', async (req, res) => {
     try {
         const { orderData } = req.body;
 
         if (!orderData) {
-            return res.status(400).json({
-                error: 'Order data is required'
-            });
+            return res.status(400).json({ error: 'Order data is required' });
         }
 
-        // Retrieve pending order
-        const orderInfo = pendingOrders.get(orderData);
-
-        if (!orderInfo) {
-            return res.status(400).json({
-                error: 'Order not found or expired. Please start over.'
-            });
+        // Decode order data
+        let orderInfo;
+        try {
+            orderInfo = JSON.parse(Buffer.from(orderData, 'base64').toString('utf8'));
+        } catch (e) {
+            return res.status(400).json({ error: 'Invalid order data' });
         }
 
-        const { client, order, challengeData, domains } = orderInfo;
+        console.log(`\n=== CERTIFICATE REQUEST ===`);
+        console.log(`Domains: ${orderInfo.domains.join(', ')}`);
 
-        console.log(`Verifying challenges for domains: ${domains.join(', ')}`);
+        // Recreate client with stored account key
+        const accountKey = await acme.crypto.createPrivateKey(orderInfo.accountKeyPem);
 
-        // Submit all challenges for validation
-        for (const { challenge } of challengeData) {
-            await client.completeChallenge(challenge);
-        }
-
-        console.log('Challenges submitted, waiting for validation...');
-
-        // Wait for order to be ready
-        const validOrder = await client.waitForValidStatus(order);
-
-        console.log('Order validated, generating certificate...');
-
-        // Generate domain private key
-        const domainKey = await acme.crypto.createPrivateKey();
-
-        // Create CSR
-        const [key, csr] = await acme.crypto.createCsr({
-            commonName: domains.find(d => !d.startsWith('*')) || domains[0],
-            altNames: domains
-        }, domainKey);
-
-        // Finalize order and get certificate
-        await client.finalizeOrder(validOrder, csr);
-        const certificate = await client.getCertificate(validOrder);
-
-        console.log('Certificate generated successfully');
-
-        // Parse certificate chain
-        const certs = certificate.split(/(?=-----BEGIN CERTIFICATE-----)/g).filter(c => c.trim());
-        const mainCert = certs[0] || '';
-        const caBundle = certs.slice(1).join('\n');
-
-        // Clean up order
-        pendingOrders.delete(orderData);
-
-        // Export private key to PEM format
-        const privateKeyPem = domainKey.toString();
-
-        res.json({
-            certificate: mainCert.trim(),
-            privateKey: privateKeyPem.trim(),
-            caBundle: caBundle.trim(),
-            fullChain: certificate.trim()
+        const client = new acme.Client({
+            directoryUrl: orderInfo.directoryUrl,
+            accountKey: accountKey
         });
+
+        // Verify DNS propagation first
+        console.log('Verifying DNS propagation...');
+        let allDNSVerified = true;
+
+        for (const challenge of orderInfo.challengeInfo) {
+            const verified = await verifyDNSPropagation(challenge.domain, challenge.keyAuthorization, 3);
+            if (!verified) {
+                allDNSVerified = false;
+                console.log(`DNS not verified for ${challenge.domain}`);
+            }
+        }
+
+        if (!allDNSVerified) {
+            console.log('DNS not fully propagated, but attempting validation anyway...');
+        }
+
+        // Get fresh order status
+        const order = await client.getOrder(orderInfo.orderUrl);
+        console.log(`Order status: ${order.status}`);
+
+        // If order is already valid, just get the certificate
+        if (order.status === 'valid') {
+            console.log('Order already valid, downloading certificate...');
+            const certificate = await client.getCertificate(order);
+            return sendCertificateResponse(res, certificate, orderInfo.domainKeyPem);
+        }
+
+        // If order is invalid, need to start over
+        if (order.status === 'invalid') {
+            return res.status(400).json({
+                error: 'El orden expiró o fue invalidado. Por favor, genera nuevos registros DNS.',
+                message: 'Order invalid - please start over'
+            });
+        }
+
+        // Get authorizations and complete challenges
+        const authorizations = await client.getAuthorizations(order);
+
+        for (const authz of authorizations) {
+            if (authz.status === 'valid') {
+                console.log(`Authorization for ${authz.identifier.value} already valid`);
+                continue;
+            }
+
+            if (authz.status === 'invalid') {
+                return res.status(400).json({
+                    error: `La autorización para ${authz.identifier.value} falló. Genera nuevos registros DNS.`,
+                    message: 'Authorization invalid'
+                });
+            }
+
+            const challenge = authz.challenges.find(c => c.type === 'dns-01');
+
+            if (challenge && challenge.status === 'pending') {
+                console.log(`Completing challenge for ${authz.identifier.value}...`);
+
+                try {
+                    await client.completeChallenge(challenge);
+                    console.log(`Challenge submitted for ${authz.identifier.value}`);
+                } catch (err) {
+                    console.error(`Error completing challenge: ${err.message}`);
+                }
+            }
+        }
+
+        // Wait for validation with retries
+        console.log('Waiting for order validation...');
+
+        let validatedOrder;
+        let attempts = 0;
+        const maxAttempts = 10;
+
+        while (attempts < maxAttempts) {
+            attempts++;
+            await wait(5000); // Wait 5 seconds between checks
+
+            validatedOrder = await client.getOrder(orderInfo.orderUrl);
+            console.log(`Attempt ${attempts}: Order status = ${validatedOrder.status}`);
+
+            if (validatedOrder.status === 'ready' || validatedOrder.status === 'valid') {
+                break;
+            }
+
+            if (validatedOrder.status === 'invalid') {
+                return res.status(400).json({
+                    error: 'Los registros DNS no son correctos. Verifica que hayas configurado los registros TXT correctamente.',
+                    message: 'Validation failed'
+                });
+            }
+        }
+
+        if (!validatedOrder || (validatedOrder.status !== 'ready' && validatedOrder.status !== 'valid')) {
+            return res.status(400).json({
+                error: 'La validación tardó demasiado. Verifica los registros DNS y vuelve a intentar.',
+                message: 'Validation timeout'
+            });
+        }
+
+        // Finalize order if needed
+        if (validatedOrder.status === 'ready') {
+            console.log('Finalizing order...');
+
+            const domainKey = await acme.crypto.createPrivateKey(orderInfo.domainKeyPem);
+
+            const [key, csr] = await acme.crypto.createCsr({
+                commonName: orderInfo.domains.find(d => !d.startsWith('*')) || orderInfo.domains[0],
+                altNames: orderInfo.domains
+            }, domainKey);
+
+            await client.finalizeOrder(validatedOrder, csr);
+
+            // Wait for certificate
+            let finalOrder;
+            for (let i = 0; i < 10; i++) {
+                await wait(3000);
+                finalOrder = await client.getOrder(orderInfo.orderUrl);
+                if (finalOrder.status === 'valid') break;
+            }
+
+            if (!finalOrder || finalOrder.status !== 'valid') {
+                return res.status(500).json({
+                    error: 'Error al finalizar el certificado',
+                    message: 'Finalization failed'
+                });
+            }
+
+            validatedOrder = finalOrder;
+        }
+
+        // Download certificate
+        console.log('Downloading certificate...');
+        const certificate = await client.getCertificate(validatedOrder);
+
+        return sendCertificateResponse(res, certificate, orderInfo.domainKeyPem);
 
     } catch (error) {
         console.error('Error getting certificate:', error);
 
-        // Provide more helpful error messages
         let userMessage = error.message;
-
         if (error.message.includes('pending')) {
             userMessage = 'Los registros DNS aún no se han propagado. Espera unos minutos más y vuelve a intentar.';
         } else if (error.message.includes('invalid')) {
-            userMessage = 'Los registros DNS no son correctos. Verifica que hayas configurado los registros TXT correctamente.';
+            userMessage = 'Los registros DNS no son correctos o el challenge expiró. Genera nuevos registros DNS.';
         }
 
         res.status(500).json({
@@ -242,7 +362,23 @@ app.post('/get-certificate', async (req, res) => {
     }
 });
 
-// Health check endpoint
+function sendCertificateResponse(res, certificate, privateKeyPem) {
+    // Parse certificate chain
+    const certs = certificate.split(/(?=-----BEGIN CERTIFICATE-----)/g).filter(c => c.trim());
+    const mainCert = certs[0] || '';
+    const caBundle = certs.slice(1).join('\n');
+
+    console.log('Certificate generated successfully!');
+
+    res.json({
+        certificate: mainCert.trim(),
+        privateKey: privateKeyPem.trim(),
+        caBundle: caBundle.trim(),
+        fullChain: certificate.trim()
+    });
+}
+
+// Health check
 app.get('/health', (req, res) => {
     res.json({
         status: 'ok',
@@ -250,7 +386,6 @@ app.get('/health', (req, res) => {
     });
 });
 
-// Start server
 app.listen(PORT, () => {
     console.log(`SSL Certificate API running on port ${PORT}`);
     console.log(`Mode: ${DIRECTORY_URL === PRODUCTION_DIRECTORY ? 'PRODUCTION' : 'STAGING'}`);
