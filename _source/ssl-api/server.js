@@ -146,10 +146,14 @@ app.post('/generate-challenge', async (req, res) => {
             }
         }
 
+        // Convert keys to PEM strings for storage
+        const accountKeyPem = accountKey.toString();
+        const domainKeyPem = domainKey.toString();
+
         // Store everything needed for certificate generation as PEM strings
         const orderData = {
-            accountKeyPem: accountKey.toString(),
-            domainKeyPem: domainKey.toString(),
+            accountKeyPem: accountKeyPem,
+            domainKeyPem: domainKeyPem,
             orderUrl: order.url,
             domains: validDomains,
             email: email,
@@ -199,12 +203,10 @@ app.post('/get-certificate', async (req, res) => {
         console.log(`\n=== CERTIFICATE REQUEST ===`);
         console.log(`Domains: ${orderInfo.domains.join(', ')}`);
 
-        // Convert PEM string back to key object using Node crypto
-        const accountKeyObject = crypto.createPrivateKey(orderInfo.accountKeyPem);
-
+        // Pass PEM string directly to acme-client (it expects string, not KeyObject)
         const client = new acme.Client({
             directoryUrl: orderInfo.directoryUrl,
-            accountKey: accountKeyObject
+            accountKey: Buffer.from(orderInfo.accountKeyPem)
         });
 
         // Verify DNS propagation first (optional check)
@@ -310,13 +312,13 @@ app.post('/get-certificate', async (req, res) => {
         if (validatedOrder.status === 'ready') {
             console.log('Finalizing order...');
 
-            // Convert domain key PEM back to key object
-            const domainKeyObject = crypto.createPrivateKey(orderInfo.domainKeyPem);
+            // Pass domain key as Buffer for CSR generation
+            const domainKeyBuffer = Buffer.from(orderInfo.domainKeyPem);
 
             const [key, csr] = await acme.crypto.createCsr({
                 commonName: orderInfo.domains.find(d => !d.startsWith('*')) || orderInfo.domains[0],
                 altNames: orderInfo.domains
-            }, domainKeyObject);
+            }, domainKeyBuffer);
 
             await client.finalizeOrder(validatedOrder, csr);
 
@@ -353,8 +355,6 @@ app.post('/get-certificate', async (req, res) => {
             userMessage = 'Los registros DNS aún no se han propagado. Espera unos minutos más y vuelve a intentar.';
         } else if (error.message.includes('invalid')) {
             userMessage = 'Los registros DNS no son correctos o el challenge expiró. Genera nuevos registros DNS.';
-        } else if (error.message.includes('modulusLength')) {
-            userMessage = 'Error interno de criptografía. Por favor, genera nuevos registros DNS.';
         }
 
         res.status(500).json({
