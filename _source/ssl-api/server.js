@@ -416,7 +416,24 @@ app.get('/health', (req, res) => {
     });
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`SSL Certificate API running on port ${PORT}`);
     console.log(`Mode: ${DIRECTORY_URL === PRODUCTION_DIRECTORY ? 'PRODUCTION' : 'STAGING'}`);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('Received SIGTERM signal. Shutting down gracefully...');
+    server.close(() => {
+        console.log('Server closed.');
+        process.exit(0);
+    });
+});
+
+process.on('SIGINT', () => {
+    console.log('Received SIGINT signal. Shutting down...');
+    server.close(() => {
+        console.log('Server closed.');
+        process.exit(0);
+    });
 });
