@@ -249,10 +249,31 @@ app.post('/get-certificate', async (req, res) => {
             console.log(`Order status: ${order.status}`);
         } catch (orderError) {
             console.error(`Error fetching order: ${orderError.message}`);
-            return res.status(400).json({
-                error: 'El orden expiró o es inválido. Por favor, genera nuevos registros DNS.',
-                message: orderError.message
-            });
+
+            // FALLBACK STRATEGY: Create a new order to leverage cached authorizations
+            // If DNS validation passed but the order URL is lost/expired, creating a new order
+            // with the same account and domains will likely instantly inherit the "valid" authorizations.
+            console.log('Attempting fallback: Creating new order to use potentially cached authorizations...');
+            try {
+                const identifiers = orderInfo.domains.map(domain => ({
+                    type: 'dns',
+                    value: domain.replace(/^\*\./, '')
+                }));
+
+                // Remove duplicates
+                const uniqueIdentifiers = identifiers.filter((id, index, self) =>
+                    index === self.findIndex(t => t.value === id.value)
+                );
+
+                order = await client.createOrder({ identifiers: uniqueIdentifiers });
+                console.log(`Fallback order status: ${order.status}`);
+            } catch (fallbackError) {
+                console.error(`Fallback failed: ${fallbackError.message}`);
+                return res.status(400).json({
+                    error: 'Error al recuperar la orden. Por favor, genera nuevos registros DNS.',
+                    message: `${orderError.message} (Fallback: ${fallbackError.message})`
+                });
+            }
         }
 
         // If order is already valid, just get the certificate
