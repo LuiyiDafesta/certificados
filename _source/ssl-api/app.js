@@ -267,6 +267,11 @@ app.post('/get-certificate', async (req, res) => {
 
                 order = await client.createOrder({ identifiers: uniqueIdentifiers });
                 console.log(`Fallback order status: ${order.status}`);
+
+                // CRITICAL FIX: Update the order URL to track the NEW order, not the old failed one
+                orderInfo.orderUrl = order.url;
+                console.log(`Updated Order URL for validation: ${orderInfo.orderUrl}`);
+
             } catch (fallbackError) {
                 console.error(`Fallback failed: ${fallbackError.message}`);
                 return res.status(400).json({
