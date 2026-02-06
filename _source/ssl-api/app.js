@@ -245,7 +245,7 @@ app.post('/get-certificate', async (req, res) => {
         console.log(`Fetching order from: ${orderInfo.orderUrl}`);
         let order;
         try {
-            order = await client.getOrder(orderInfo.orderUrl);
+            order = await client.getOrder({ url: orderInfo.orderUrl });
             console.log(`Order status: ${order.status}`);
         } catch (orderError) {
             console.error(`Error fetching order: ${orderError.message}`);
@@ -340,7 +340,7 @@ app.post('/get-certificate', async (req, res) => {
             await wait(4000); // Wait 4 seconds between checks
 
             try {
-                validatedOrder = await client.getOrder(orderInfo.orderUrl);
+                validatedOrder = await client.getOrder({ url: orderInfo.orderUrl });
                 console.log(`Attempt ${attempts}/${maxAttempts}: Order status = ${validatedOrder.status}`);
 
                 if (validatedOrder.status === 'ready' || validatedOrder.status === 'valid') {
@@ -383,7 +383,7 @@ app.post('/get-certificate', async (req, res) => {
             let finalOrder;
             for (let i = 0; i < 15; i++) {
                 await wait(2000);
-                finalOrder = await client.getOrder(orderInfo.orderUrl);
+                finalOrder = await client.getOrder({ url: orderInfo.orderUrl });
                 console.log(`Finalization check ${i + 1}: ${finalOrder.status}`);
                 if (finalOrder.status === 'valid') break;
             }
