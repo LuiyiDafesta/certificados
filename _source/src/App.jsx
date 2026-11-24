@@ -2,6 +2,7 @@ import { useState } from 'react'
 import CertificateForm from './components/CertificateForm'
 import DNSRecords from './components/DNSRecords'
 import CertificateDownload from './components/CertificateDownload'
+import { saveEmail, saveCertifiedDomain } from './utils/storage'
 
 // API Configuration
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://apissl.lsnetinformatica.com.ar'
@@ -77,6 +78,7 @@ function App() {
 
       const data = await response.json()
 
+      saveEmail(formData.email)
       setDnsRecords(data.dnsRecords || [])
       setOrderData(data.orderData || null)
       setCurrentStep(2)
@@ -113,6 +115,13 @@ function App() {
 
       const data = await response.json()
 
+      saveEmail(formData.email)
+      saveCertifiedDomain({
+        domains: formData.domains.filter(d => d.trim() !== ''),
+        certificateType: formData.certificateType,
+        email: formData.email
+      })
+
       setCertificate({
         crt: data.certificate || '',
         privateKey: data.privateKey || '',
@@ -128,11 +137,11 @@ function App() {
 
   const handleStartOver = () => {
     setCurrentStep(1)
-    setFormData({
-      email: '',
+    setFormData(prev => ({
+      email: prev.email,
       certificateType: 'single',
       domains: ['']
-    })
+    }))
     setDnsRecords([])
     setOrderData(null)
     setCertificate({ crt: '', privateKey: '', caBundle: '' })
@@ -226,6 +235,7 @@ function App() {
           <CertificateDownload
             certificate={certificate}
             domains={formData.domains}
+            email={formData.email}
             copyToClipboard={copyToClipboard}
             downloadFile={downloadFile}
             onStartOver={handleStartOver}
