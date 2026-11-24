@@ -463,6 +463,55 @@ function sendCertificateResponse(res, certificate, privateKeyPem) {
     });
 }
 
+// Favicon handler
+app.get('/favicon.ico', (req, res) => res.status(204).end());
+
+// Root endpoint: API status & link to web app
+app.get('/', (req, res) => {
+    res.format({
+        'text/html': () => {
+            res.send(`<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SSL Certificate API - LSNet</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+    .card { background: #1e293b; padding: 2.5rem; border-radius: 1rem; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); max-width: 480px; width: 90%; text-align: center; border: 1px solid #334155; }
+    .status { display: inline-flex; align-items: center; gap: 0.5rem; background: #064e3b; color: #34d399; padding: 0.35rem 0.85rem; border-radius: 9999px; font-weight: 600; font-size: 0.875rem; margin-bottom: 1.25rem; }
+    h1 { font-size: 1.5rem; margin: 0 0 0.5rem; }
+    p { color: #94a3b8; font-size: 0.95rem; line-height: 1.5; margin: 0 0 1.5rem; }
+    .btn { display: inline-block; background: #2563eb; color: #fff; text-decoration: none; padding: 0.75rem 1.5rem; border-radius: 0.5rem; font-weight: 600; transition: background 0.2s; }
+    .btn:hover { background: #1d4ed8; }
+    .meta { margin-top: 1.5rem; font-size: 0.8rem; color: #64748b; border-top: 1px solid #334155; padding-top: 1rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="status">● API Online (${DIRECTORY_URL === PRODUCTION_DIRECTORY ? 'Producción' : 'Staging'})</div>
+    <h1>SSL Certificate API</h1>
+    <p>El backend de generación de certificados Let's Encrypt está funcionando correctamente.</p>
+    <a href="https://lsnetinformatica.com.ar/certificados/" class="btn">Abrir Generador de Certificados →</a>
+    <div class="meta">Desarrollado por LSNet Informática</div>
+  </div>
+</body>
+</html>`);
+        },
+        'application/json': () => {
+            res.json({
+                name: 'SSL Certificate API',
+                status: 'online',
+                mode: DIRECTORY_URL === PRODUCTION_DIRECTORY ? 'production' : 'staging',
+                appUrl: 'https://lsnetinformatica.com.ar/certificados/'
+            });
+        },
+        default: () => {
+            res.send('SSL Certificate API is running.');
+        }
+    });
+});
+
 // Health check
 app.get('/health', (req, res) => {
     res.json({
