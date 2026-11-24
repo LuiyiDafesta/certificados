@@ -1,4 +1,6 @@
 function DNSRecords({ dnsRecords, onGetCertificate, onBack, copyToClipboard, isLoading }) {
+    const hasDuplicateNames = dnsRecords.some((r, i) => dnsRecords.findIndex(o => o.name === r.name) !== i);
+
     return (
         <div className="card fade-in">
             <div className="card-header">
@@ -50,6 +52,15 @@ function DNSRecords({ dnsRecords, onGetCertificate, onBack, copyToClipboard, isL
                         </div>
                     </div>
                 ))
+            )}
+
+            {hasDuplicateNames && (
+                <div className="alert alert-warning" style={{ marginTop: '1rem' }}>
+                    <span className="alert-icon">💡</span>
+                    <div>
+                        <strong>Atención - Registros con el mismo Host:</strong> Hay más de un registro para el mismo nombre de host (ej. Wildcard + Base). Debes agregar <strong>ambos registros TXT por separado</strong> en tu panel de DNS con sus respectivos valores sin sobreescribir uno con el otro.
+                    </div>
+                </div>
             )}
 
             <div className="alert alert-warning" style={{ marginTop: '1rem' }}>

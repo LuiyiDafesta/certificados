@@ -4,7 +4,7 @@ import DNSRecords from './components/DNSRecords'
 import CertificateDownload from './components/CertificateDownload'
 
 // API Configuration
-const N8N_BASE_URL = 'https://apissl.lsnetinformatica.com.ar'
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://apissl.lsnetinformatica.com.ar'
 
 function App() {
   const [currentStep, setCurrentStep] = useState(1)
@@ -58,7 +58,7 @@ function App() {
     setLoadingMessage('Generando desafío DNS...')
 
     try {
-      const response = await fetch(`${N8N_BASE_URL}/generate-challenge`, {
+      const response = await fetch(`${API_BASE_URL}/generate-challenge`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -71,7 +71,8 @@ function App() {
       })
 
       if (!response.ok) {
-        throw new Error('Error al generar el desafío DNS')
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || errorData.message || 'Error al generar el desafío DNS')
       }
 
       const data = await response.json()
@@ -93,7 +94,7 @@ function App() {
     setLoadingMessage('Verificando registros DNS y generando certificado...')
 
     try {
-      const response = await fetch(`${N8N_BASE_URL}/get-certificate`, {
+      const response = await fetch(`${API_BASE_URL}/get-certificate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -107,7 +108,7 @@ function App() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.message || 'Error al obtener el certificado')
+        throw new Error(errorData.error || errorData.message || 'Error al obtener el certificado')
       }
 
       const data = await response.json()

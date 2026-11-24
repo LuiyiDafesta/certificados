@@ -1,0 +1,12 @@
+{
+  "name": "letsencrypt-project",
+  "private": true,
+  "version": "1.0.0",
+  "description": "SSL Certificate Generator with Let's Encrypt (React + Node.js API)",
+  "scripts": {
+    "dev": "npm --prefix _source run dev",
+    "build": "npm --prefix _source run build && node -e \"require('fs').cpSync('_source/dist', '.', { recursive: true })\"",
+    "api": "npm --prefix _source/ssl-api run dev",
+    "install:all": "npm --prefix _source install && npm --prefix _source/ssl-api install"
+  }
+}
